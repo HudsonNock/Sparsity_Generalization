@@ -15,7 +15,7 @@ def get_flat_fts(in_size, fts):
 
 class L0PolicyNet(nn.Module):
     def __init__(self, num_classes=6, input_size = (1,35,35), input_dims=(1, 32, 32), conv_dims=(32, 32, 16), fc_dims=512,
-                 N=50000, beta_ema=0., weight_decay=0.0, lambas=(0.001, 0.001, 0.001, 0.001), local_rep=False,
+                 N=50000, beta_ema=0., weight_decay=0.0, lambas=(0.01, 0.01, 0.01, 0.01), local_rep=False,
                  temperature=2./3.):
         super(L0PolicyNet, self).__init__()
         self.N = N

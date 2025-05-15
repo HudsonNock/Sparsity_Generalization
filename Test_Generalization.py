@@ -121,7 +121,11 @@ def main():
     #)
     num_seeds = 300 #20
     n_actions = 6
-    for j in range(1,2):
+    for j in range(2):
+        if j == 0:
+            num_seeds = 20
+        else:
+            num_seeds = 300
         percentage_complete = np.empty((7, num_seeds))
         for i in range(7):
             if j == 0:
@@ -131,8 +135,8 @@ def main():
 
             # --- Build Agents and Buffer ---
             step_num = int(500*i)
-            load_path = f"SAC_checkpoints2\\checkpoint_{step_num}.pth"
-            policy = build_agents_and_buffer(device, load_path, False)
+            load_path = f"SACL0_checkpoints2\\checkpoint_010_{step_num}.pth"
+            policy = build_agents_and_buffer(device, load_path, True)
             epsilon = 0.05
             max_steps = 300 #500
 
@@ -153,7 +157,10 @@ def main():
             attempts = np.zeros((num_seeds,), dtype=np.int64)
             successes = np.zeros((num_seeds,), dtype=np.int64)
 
-            for step in range(1, 1500): # 1000
+            num_steps = 1500
+            if j == 0:
+                num_steps == 500
+            for step in range(1, num_steps): # 1000
                 player_seed = env.player_seed.copy()
                 with torch.no_grad(): # No need for gradients during data collection
                     # Get action from policy
@@ -277,9 +284,9 @@ def main():
                 percentage_complete[i,k] = successes[k] / attempts[k]
             print(i)
         if j == 0:
-            np.save("results\\SAC_v2_300_Train.npy", percentage_complete)
+            np.save("results\\SACL0_010_300_Train.npy", percentage_complete)
         else:
-            np.save("results\\SAC_v2_300_Test.npy", percentage_complete)
+            np.save("results\\SACL0_010_300_Test.npy", percentage_complete)
 
 
 if __name__ == "__main__":

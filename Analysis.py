@@ -63,8 +63,12 @@ def plot_test_300():
     # Load SAC data
     sac_train = np.load("results/SAC_v2_Train.npy")
     sacl0_train = np.load("results/SACL0_v2_Train.npy")
-    sac_test = np.load("results/SAC_v2_300_Test.npy")       # (13, 20)
+    sac_test = np.load("results/SAC_v2_300_Test.npy")
     sacl0_test = np.load("results/SACL0_v2_300_Test.npy")
+    sacl0_003_train = np.load("results/SACL0_003_300_Train.npy")
+    sacl0_003_test = np.load("results/SACL0_003_300_Test.npy")
+    sacl0_010_train = np.load("results/SACL0_010_300_Train.npy")
+    sacl0_010_test = np.load("results/SACL0_010_300_Test.npy")
 
     #assert sac_train.shape == sac_test.shape == sacl0_train.shape == sacl0_test.shape, "All arrays must have the same shape"
     num_saves, num_maps = sac_test.shape
@@ -74,6 +78,10 @@ def plot_test_300():
     sacl0_test_avg = sacl0_test.mean(axis=1)
     sac_train_avg = sac_train.mean(axis=1)
     sacl0_train_avg = sacl0_train.mean(axis=1)
+    sacl0_003_train_avg = sacl0_003_train.mean(axis=1)
+    sacl0_003_test_avg = sacl0_003_test.mean(axis=1)
+    sacl0_010_train_avg = sacl0_010_train.mean(axis=1)
+    sacl0_010_test_avg = sacl0_010_test.mean(axis=1)
 
     # X-axis: number of transitions trained on
     save_indices = np.arange(num_saves)
@@ -83,8 +91,12 @@ def plot_test_300():
     plt.figure(figsize=(10, 6))
     plt.plot(transitions, sac_train_avg * 100, label="SAC Train", color="blue", linestyle="-")
     plt.plot(transitions, sac_test_avg * 100, label="SAC Test", color="blue", linestyle="--")
-    plt.plot(transitions, sacl0_train_avg * 100, label="SACL0 Train", color="orange", linestyle="-")
-    plt.plot(transitions, sacl0_test_avg * 100, label="SACL0 Test", color="orange", linestyle="--")
+    plt.plot(transitions, sacl0_train_avg * 100, label="SACL0 1 Train", color="orange", linestyle="-")
+    plt.plot(transitions, sacl0_test_avg * 100, label="SACL0 1 Test", color="orange", linestyle="--")
+    plt.plot(transitions, sacl0_003_train_avg * 100, label="SACL0 3 Train", color="red", linestyle="-")
+    plt.plot(transitions, sacl0_003_test_avg * 100, label="SACL0 3 Test", color="red", linestyle="--")
+    plt.plot(transitions, sacl0_010_train_avg * 100, label="SACL0 10 Train", color="green", linestyle="-")
+    plt.plot(transitions, sacl0_010_test_avg * 100, label="SACL0 10 Test", color="green", linestyle="--")
     plt.xlabel("Number of Transitions Trained On")
     plt.ylabel("Average Completion Rate (%)")
     plt.title("SAC vs SACL0 - Test avg across 300 new maps - lambda = 0.001")
