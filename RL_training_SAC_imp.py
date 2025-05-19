@@ -199,22 +199,19 @@ def main():
     #env_name = "procgen:procgen-caveflyer"
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
-    lambdas = [0, 0.0001, 0.0005, 0.001, 0.005, 0.01, 0.05, 0.1]
+    num_maps_list = [20, 50, 100, 300, 1000]
+    lambdas = [-1, 0.005] #save by * 10000
+    test_pairs = [(a, b) for a in num_maps_list for b in lambdas]
 
-    #env = ParallelEnv(
-    #    num_workers=num_envs,
-    #    create_env_fn=lambda: GymEnv(env_name, frame_skip=2, paint_vel_info=True, use_backgrounds=False, num_levels=20, start_level=0),
-    #    device='cpu' #device # Can run env stepping on GPU if desired/possible
-    #)
-    for lmbda in lambdas:
-        env = cf.VectorizedCaveflyer(num_agents=num_envs, initial_seed=0, num_seeds=20)
+    for num_maps, lmbda in test_pairs:
+        env = cf.VectorizedCaveflyer(num_agents=num_envs, initial_seed=0, num_seeds=num_maps)
 
         n_actions = 6
 
         # --- Build Agents and Buffer ---
         (policy, q_net1, q_net2, target_q_net1, target_q_net2, log_alpha,
         replay_buffer, actor_optim, critic1_optim, critic2_optim, alpha_optim
-        ) = build_agents_and_buffer(device, sparse= (lmbda != 0), load_path=None, lmbda=lmbda)
+        ) = build_agents_and_buffer(device, sparse= (lmbda != -1), load_path=None, lmbda=lmbda)
 
         # --- Hyperparameters ---
         gamma = 0.99           # Discount factor
@@ -390,7 +387,7 @@ def main():
                     # Calculate Actor loss: J_pi = E_{s~D} [ sum_a [ pi(a|s) * (alpha * log pi(a|s) - Q_min(s,a)) ] ]
                     # We want to maximize this, so minimize its negative.
                     actor_loss_term = current_probs * (alpha.detach() * current_log_probs - min_q_all_actions.detach())
-                    if lmbda != 0:
+                    if lmbda != -1:
                         loss_actor = (torch.sum(actor_loss_term, dim=-1)).mean() + policy.regularization()
                     else:
                         loss_actor = (torch.sum(actor_loss_term, dim=-1)).mean()
@@ -425,7 +422,10 @@ def main():
 
                     # --- Logging (use manually calculated losses) ---
                 if step % 100 == 0: # Log roughly every 1000 frames
-                    save_path = f"Sparsity_Checkpoints\\chkpt_{int(lmbda*10000)}_{step}.pth"
+                    if lmbda != -1:
+                        save_path = f"Sparsity_Checkpoints_maps\\chkpt_50_{num_maps}_{step}.pth"
+                    else:
+                        save_path = f"Sparsity_Checkpoints_maps\\chkpt_SAC_{num_maps}_{step}.pth"
 
                     # Ensure log_alpha value is current before saving optimizer state
                     # (though it should be if optimizer step happened)
