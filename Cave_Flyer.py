@@ -106,6 +106,8 @@ class VectorizedCaveflyer:
             # Vertical segment: from (p1_row, p2_col) to (p2_row, p2_col)
             min_r, max_r = min(p1_row, p2_row), max(p1_row, p2_row)
             cave_map[min_r : max_r + 1, p2_col] = self.shades["background"]
+
+        path_cpy = cave_map.copy()
     
         # Step 4: Iterative Expansion
         # Max iterations safeguard: n*n is the theoretical max cells to flip one by one.
@@ -175,7 +177,7 @@ class VectorizedCaveflyer:
         def find_empty_spot(current_map_for_agent):
             while True:
                 pos = np.random.rand(2) * (self.map_size - 2) + 1
-                if current_map_for_agent[int(pos[0]), int(pos[1])] == self.shades["background"]:
+                if current_map_for_agent[int(pos[0]), int(pos[1])] == self.shades["background"] and path_cpy[int(pos[0]), int(pos[1])] != self.shades["background"]:
                     return pos.astype(int)
 
         cave_map[init_p_pos] = self.shades["player"]
@@ -233,9 +235,9 @@ class VectorizedCaveflyer:
 
             # Define the ranges in original array
             i_min = map_center_row - half + 1
-            i_max = map_center_row + half
+            i_max = map_center_row + half + 2
             j_min = map_center_col - half + 1
-            j_max = map_center_col + half
+            j_max = map_center_col + half + 2
 
             # Create padded array
             padded = np.full((self.render_size, self.render_size), self.shades["wall"], dtype=map_cpy.dtype)
@@ -631,7 +633,7 @@ if __name__ == '__main__':
     # but let done agents pick new random seeds.
     # Or provide a list: done_seeds_list=[1000, 2000, 3000]
     num_test_agents = 512
-    env = VectorizedCaveflyer(num_agents=num_test_agents, initial_seed=20, num_seeds=1)
+    env = VectorizedCaveflyer(num_agents=num_test_agents, initial_seed=0, num_seeds=200)
 
     cv2.namedWindow("game", cv2.WINDOW_NORMAL)
     cv2.resizeWindow("game", 512, 512)
@@ -652,7 +654,7 @@ if __name__ == '__main__':
         pygame.K_DOWN:  0,  # you could map down to no-op or reverse-thrust
     }
 
-    for step_count in range(1000): # Simulate a few "logical" episodes or sequences of steps
+    for step_count in range(100000): # Simulate a few "logical" episodes or sequences of steps
         # read current key state
         keys = pygame.key.get_pressed()
 
@@ -680,5 +682,5 @@ if __name__ == '__main__':
         #print(rewards)
         cv2.imshow("game", pixels[0])
         cv2.waitKey(1)
-        #time.sleep(0.1)
-        
+        time.sleep(0.1)
+                
