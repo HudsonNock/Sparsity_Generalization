@@ -63,7 +63,7 @@ class PolicyNet(nn.Module):
         return self.lin2(x)  # [B,1]
 
 
-def build_agents_and_buffer(device, sparse, load_path, lmbda):
+def build_agents_and_buffer(device, sparse, load_path, lmbda, loading_L0_with_SAC):
     #n_actions = act_spec.shape[-1]
     n_actions = 6
 
@@ -136,32 +136,41 @@ def build_agents_and_buffer(device, sparse, load_path, lmbda):
 
             def strip_module_prefix(sd):
                 return {k.replace("module.", "", 1): v for k, v in sd.items()}
+            
+            if loading_L0_with_SAC:
+                with torch.no_grad():
+                    policy.fcs[0].weights.copy_(checkpoint['actor_state_dict']['lin1.weight'].T)
+                    policy.fcs[0].bias.copy_(checkpoint['actor_state_dict']['lin1.bias'].T)
+                    policy.fcs[2].weights.copy_(checkpoint['actor_state_dict']['lin2.weight'].T)
+                    policy.fcs[2].bias.copy_(checkpoint['actor_state_dict']['lin2.bias'].T)
+            else:
+                policy.load_state_dict(strip_module_prefix(checkpoint['actor_state_dict']))
 
-            policy.load_state_dict(strip_module_prefix(checkpoint['actor_state_dict']))
             q_net1.load_state_dict(strip_module_prefix(checkpoint['critic1_state_dict']))
             q_net2.load_state_dict(strip_module_prefix(checkpoint['critic2_state_dict']))
             target_qvalue1_td.load_state_dict(checkpoint['target1_state_dict'])
             target_qvalue2_td.load_state_dict(checkpoint['target2_state_dict'])
 
-            actor_optim.load_state_dict(checkpoint['actor_optim_state_dict'])
-            critic1_optim.load_state_dict(checkpoint['critic1_optim_state_dict'])
-            critic2_optim.load_state_dict(checkpoint['critic2_optim_state_dict'])
-            alpha_optim.load_state_dict(checkpoint['alpha_optim_state_dict'])
+            if not loading_L0_with_SAC:
+                actor_optim.load_state_dict(checkpoint['actor_optim_state_dict'])
+                critic1_optim.load_state_dict(checkpoint['critic1_optim_state_dict'])
+                critic2_optim.load_state_dict(checkpoint['critic2_optim_state_dict'])
+                alpha_optim.load_state_dict(checkpoint['alpha_optim_state_dict'])
 
-            # Load log_alpha value from checkpoint (overwrites initial value)
-            # Make sure the loaded tensor has requires_grad=True and is on the correct device
-            # log_alpha is managed by its optimizer, but we can load the value explicitly if saved
-            if 'log_alpha' in checkpoint:
-                 # Re-assigning might break the link with the optimizer if not careful.
-                 # It's often better to rely on the optimizer loading the state.
-                 # However, if you saved it explicitly and want to load:
-                 with torch.no_grad():
-                      loaded_log_alpha = checkpoint['log_alpha'].to(device).requires_grad_(True)
-                      # If log_alpha is a parameter managed directly (not just via optim):
-                      log_alpha.copy_(loaded_log_alpha)
-                      # Since log_alpha IS the parameter in the optimizer list, loading the
-                      # optimizer state should correctly restore it. Let's trust the optimizer load.
-                      pass # Trusting optimizer load for log_alpha
+                # Load log_alpha value from checkpoint (overwrites initial value)
+                # Make sure the loaded tensor has requires_grad=True and is on the correct device
+                # log_alpha is managed by its optimizer, but we can load the value explicitly if saved
+                if 'log_alpha' in checkpoint:
+                    # Re-assigning might break the link with the optimizer if not careful.
+                    # It's often better to rely on the optimizer loading the state.
+                    # However, if you saved it explicitly and want to load:
+                    with torch.no_grad():
+                        loaded_log_alpha = checkpoint['log_alpha'].to(device).requires_grad_(True)
+                        # If log_alpha is a parameter managed directly (not just via optim):
+                        log_alpha.copy_(loaded_log_alpha)
+                        # Since log_alpha IS the parameter in the optimizer list, loading the
+                        # optimizer state should correctly restore it. Let's trust the optimizer load.
+                        pass # Trusting optimizer load for log_alpha
 
             # **Crucially, update target networks to match loaded Q-networks**
             #target_qvalue1_td.load_state_dict(qvalue1_td.state_dict())
@@ -214,12 +223,12 @@ def main():
 
             load_path = None
             if same_init and lmbda != -1:
-                load_path = f"Sparsity_Checkpoints_duplicate/chkpt_SAC_{num_maps}_0_{iteration}.pth"
+                load_path = f"Sparsity_Checkpoints_duplicate\\chkpt_SAC_{num_maps}_0_{iteration}.pth"
 
             # --- Build Agents and Buffer ---
             (policy, q_net1, q_net2, target_q_net1, target_q_net2, log_alpha,
             replay_buffer, actor_optim, critic1_optim, critic2_optim, alpha_optim
-            ) = build_agents_and_buffer(device, sparse= (lmbda != -1), load_path=load_path, lmbda=lmbda)
+            ) = build_agents_and_buffer(device, sparse= (lmbda != -1), load_path=load_path, lmbda=lmbda, loading_L0_with_SAC=True)
 
             # --- Hyperparameters ---
             gamma = 0.99           # Discount factor
@@ -431,9 +440,9 @@ def main():
                         # --- Logging (use manually calculated losses) ---
                     if step % 200 == 0: # Log roughly every 1000 frames
                         if lmbda != -1:
-                            save_path = f"Sparsity_Checkpoints_duplicate/chkpt_{lmbda}_{num_maps}_{step}_{iteration}.pth"
+                            save_path = f"Sparsity_Checkpoints_duplicate\\chkpt_{lmbda}_{num_maps}_{step}_{iteration}.pth"
                         else:
-                            save_path = f"Sparsity_Checkpoints_duplicate/chkpt_SAC_{num_maps}_{step}_{iteration}.pth"
+                            save_path = f"Sparsity_Checkpoints_duplicate\\chkpt_SAC_{num_maps}_{step}_{iteration}.pth"
 
                         # Ensure log_alpha value is current before saving optimizer state
                         # (though it should be if optimizer step happened)
