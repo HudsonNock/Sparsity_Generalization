@@ -199,258 +199,266 @@ def main():
     #env_name = "procgen:procgen-caveflyer"
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
-    num_maps_list = [20, 50, 100, 300, 1000]
-    lambdas = [-1, 0.005] #save by * 10000
+    num_maps_list = [20]
+    lambdas = [0.1] #save by * 10000
     test_pairs = [(a, b) for a in num_maps_list for b in lambdas]
 
-    for num_maps, lmbda in test_pairs:
-        env = cf.VectorizedCaveflyer(num_agents=num_envs, initial_seed=0, num_seeds=num_maps)
+    duplicate = 5
+    same_init = True
 
-        n_actions = 6
+    for iteration in range(duplicate):
+        for num_maps, lmbda in test_pairs:
+            env = cf.VectorizedCaveflyer(num_agents=num_envs, initial_seed=0, num_seeds=num_maps)
 
-        # --- Build Agents and Buffer ---
-        (policy, q_net1, q_net2, target_q_net1, target_q_net2, log_alpha,
-        replay_buffer, actor_optim, critic1_optim, critic2_optim, alpha_optim
-        ) = build_agents_and_buffer(device, sparse= (lmbda != -1), load_path=None, lmbda=lmbda)
+            n_actions = 6
 
-        # --- Hyperparameters ---
-        gamma = 0.99           # Discount factor
-        tau = 0.005            # Target network polyak averaging factor
-        target_entropy = 0.8 #-torch.log(torch.tensor(1.0 / n_actions)).item() # Target entropy heuristic
-        collect_steps  = 6       # Collect transitions for X steps before potentially updating
-        batch_size     = 128
-        initial_collect_frames = 2000 # Collect some random frames before starting training
-        epsilon = 0.05
+            load_path = None
+            if same_init and lmbda != -1:
+                load_path = f"Sparsity_Checkpoints_duplicate/chkpt_SAC_{num_maps}_0_{iteration}.pth"
 
-        # --- Training Loop ---
-        #td = env.reset()
-        # Preprocess initial observation
-        #td["pixels"] = (torch.relu(td["pixels"][:,:,:,1]*1.2/255 - td["pixels"][:,:,:,2]*0.6/255))[:,None,:,:]#torch.mean(td["pixels"], dim=-1, dtype=torch.float32)[:, None, :, :]
-        pixels, vel, angle = env.reset()
-        td = TensorDict({
-            "pixels":pixels[:,None,:,:].astype(np.float32) / 250.0,
-            "vel":vel.astype(np.float32),
-            "angle":angle.astype(np.float32),}, batch_size=[num_envs])
-        td = td.to(device)
-        total_frames = 0
+            # --- Build Agents and Buffer ---
+            (policy, q_net1, q_net2, target_q_net1, target_q_net2, log_alpha,
+            replay_buffer, actor_optim, critic1_optim, critic2_optim, alpha_optim
+            ) = build_agents_and_buffer(device, sparse= (lmbda != -1), load_path=load_path, lmbda=lmbda)
 
-        print(f"Starting data collection... lambda = {lmbda}")
+            # --- Hyperparameters ---
+            gamma = 0.99           # Discount factor
+            tau = 0.005            # Target network polyak averaging factor
+            target_entropy = 0.8 #-torch.log(torch.tensor(1.0 / n_actions)).item() # Target entropy heuristic
+            collect_steps  = 6       # Collect transitions for X steps before potentially updating
+            batch_size     = 128
+            initial_collect_frames = 2000 # Collect some random frames before starting training
+            epsilon = 0.05
 
-        train = True
+            # --- Training Loop ---
+            #td = env.reset()
+            # Preprocess initial observation
+            #td["pixels"] = (torch.relu(td["pixels"][:,:,:,1]*1.2/255 - td["pixels"][:,:,:,2]*0.6/255))[:,None,:,:]#torch.mean(td["pixels"], dim=-1, dtype=torch.float32)[:, None, :, :]
+            pixels, vel, angle = env.reset()
+            td = TensorDict({
+                "pixels":pixels[:,None,:,:].astype(np.float32) / 250.0,
+                "vel":vel.astype(np.float32),
+                "angle":angle.astype(np.float32),}, batch_size=[num_envs])
+            td = td.to(device)
+            total_frames = 0
 
-        steps = np.zeros((num_envs,), dtype=np.int64)
-        max_steps = 500
+            print(f"Starting data collection... lambda = {lmbda}")
 
-        if not train:
-            cv2.namedWindow("game", cv2.WINDOW_NORMAL)
-            cv2.resizeWindow("game", 512, 512)
+            train = True
 
-        for step in range(0, 1201): # Loop based on interactions per env
-            # --- Collect Transitions ---
-            for _ in range(collect_steps):
-                with torch.no_grad(): # No need for gradients during data collection
-                    # Get action from policy
-                    logits = policy.forward(td["pixels"].to(device), td["vel"].to(device), td["angle"].to(device)) # Modifies td_current_step in-place adds 'action' and 'logits'
-                    probs = get_prob_from_logits(logits)
-                    action = sample_action_from_probs(probs)
-                    #td["action"] = torch.tensor(np.random.randint(0,8, (32,), dtype=np.int64))
-                    random_actions = torch.randint(0, n_actions, (num_envs,), device=td.device, dtype=torch.int64)
-                    take_random = torch.rand((num_envs,), device=td.device) < epsilon
-                    td["action_idx"] = torch.where(take_random, random_actions, action)
-                    # Step the environment
-                    pixels, vel, angle, rewards, dones = env.step(np.array(td["action_idx"].to('cpu'))) # Env expects action index
+            steps = np.zeros((num_envs,), dtype=np.int64)
+            max_steps = 500
 
-                    steps += 1
-                    steps[dones] = 0
+            if not train:
+                cv2.namedWindow("game", cv2.WINDOW_NORMAL)
+                cv2.resizeWindow("game", 512, 512)
 
-                    agents_reset = (steps == max_steps)
-                    if np.any(agents_reset):
-                        pixels, vel, angle = env.reset(agents_reset)
-                        dones[agents_reset] = True
-                        steps[agents_reset] = 0
-                    # Preprocess next observation
-                    #td["next"]["pixels"] = (torch.relu(td["next"]["pixels"][:,:,:,1]*1.2/255 - td["next"]["pixels"][:,:,:,2]*0.6/255))[:,None,:,:] #torch.mean(td["next"]["pixels"], dim=-1, dtype=torch.float32)[:, None, :, :]
-                # Build the transition TensorDict
-                # Keys should match what's expected by the loss calculation later
-                transition = TensorDict({
-                    "pixels":   td["pixels"].to('cpu'), # Move to CPU for storage
-                    "vel": td["vel"].to('cpu'),
-                    "angle": td["angle"].to('cpu'),
-                    "action": td["action_idx"].to('cpu'),
-                    "next": TensorDict({
-                        "pixels": torch.tensor(pixels[:,None,:,:].astype(np.float32) / 250.0),
-                        "vel": torch.tensor(vel.astype(np.float32)),
-                        "angle": torch.tensor(angle.astype(np.float32)),
-                        "reward": torch.tensor(rewards.astype(np.float32)),
-                        "done":   torch.tensor(dones),
-                        # "terminated": td_next_step["next"]["terminated"].cpu() # Include if available/needed
-                    }, batch_size=[num_envs], device='cpu'),
-                    # Optional: store log_prob if needed, but SAC usually recomputes it
-                }, batch_size=[num_envs], device='cpu')
+            for step in range(0, 2401): # Loop based on interactions per env
+                # --- Collect Transitions ---
+                for _ in range(collect_steps):
+                    with torch.no_grad(): # No need for gradients during data collection
+                        # Get action from policy
+                        logits = policy.forward(td["pixels"].to(device), td["vel"].to(device), td["angle"].to(device)) # Modifies td_current_step in-place adds 'action' and 'logits'
+                        probs = get_prob_from_logits(logits)
+                        action = sample_action_from_probs(probs)
+                        #td["action"] = torch.tensor(np.random.randint(0,8, (32,), dtype=np.int64))
+                        random_actions = torch.randint(0, n_actions, (num_envs,), device=td.device, dtype=torch.int64)
+                        take_random = torch.rand((num_envs,), device=td.device) < epsilon
+                        td["action_idx"] = torch.where(take_random, random_actions, action)
+                        # Step the environment
+                        pixels, vel, angle, rewards, dones = env.step(np.array(td["action_idx"].to('cpu'))) # Env expects action index
 
-                # Add to replay buffer (handle unbinding for ParallelEnv)
-                for i, single_td in enumerate(transition.unbind(0)):   # this gives you 8 TensorDicts of batch_size [1]
-                    if not agents_reset[i]:
-                        replay_buffer.add(single_td)
-                # Update total frames collected
-                total_frames += num_envs
+                        steps += 1
+                        steps[dones] = 0
 
-                # Prepare for the next iteration
-                td = transition["next"] # Use the 'next' state as the current state
+                        agents_reset = (steps == max_steps)
+                        if np.any(agents_reset):
+                            pixels, vel, angle = env.reset(agents_reset)
+                            dones[agents_reset] = True
+                            steps[agents_reset] = 0
+                        # Preprocess next observation
+                        #td["next"]["pixels"] = (torch.relu(td["next"]["pixels"][:,:,:,1]*1.2/255 - td["next"]["pixels"][:,:,:,2]*0.6/255))[:,None,:,:] #torch.mean(td["next"]["pixels"], dim=-1, dtype=torch.float32)[:, None, :, :]
+                    # Build the transition TensorDict
+                    # Keys should match what's expected by the loss calculation later
+                    transition = TensorDict({
+                        "pixels":   td["pixels"].to('cpu'), # Move to CPU for storage
+                        "vel": td["vel"].to('cpu'),
+                        "angle": td["angle"].to('cpu'),
+                        "action": td["action_idx"].to('cpu'),
+                        "next": TensorDict({
+                            "pixels": torch.tensor(pixels[:,None,:,:].astype(np.float32) / 250.0),
+                            "vel": torch.tensor(vel.astype(np.float32)),
+                            "angle": torch.tensor(angle.astype(np.float32)),
+                            "reward": torch.tensor(rewards.astype(np.float32)),
+                            "done":   torch.tensor(dones),
+                            # "terminated": td_next_step["next"]["terminated"].cpu() # Include if available/needed
+                        }, batch_size=[num_envs], device='cpu'),
+                        # Optional: store log_prob if needed, but SAC usually recomputes it
+                    }, batch_size=[num_envs], device='cpu')
 
-                if not train:
-                    print(td["reward"].detach().to('cpu').numpy()[0])
-                    time.sleep(0.03)
-                    pixels_np = (td["pixels"][0].detach().to('cpu').numpy() * 255).astype(np.uint8)
-                    cv2.imshow("game", pixels_np[0,:,:])
-                    cv2.waitKey(1)
-                    pass
-                td = td.to(device)
+                    # Add to replay buffer (handle unbinding for ParallelEnv)
+                    for i, single_td in enumerate(transition.unbind(0)):   # this gives you 8 TensorDicts of batch_size [1]
+                        if not agents_reset[i]:
+                            replay_buffer.add(single_td)
+                    # Update total frames collected
+                    total_frames += num_envs
+
+                    # Prepare for the next iteration
+                    td = transition["next"] # Use the 'next' state as the current state
+
+                    if not train:
+                        print(td["reward"].detach().to('cpu').numpy()[0])
+                        time.sleep(0.03)
+                        pixels_np = (td["pixels"][0].detach().to('cpu').numpy() * 255).astype(np.uint8)
+                        cv2.imshow("game", pixels_np[0,:,:])
+                        cv2.waitKey(1)
+                        pass
+                    td = td.to(device)
 
 
-            # --- Update Networks ---
-            if total_frames >= initial_collect_frames and train:
-                for j in range(int(1.5*collect_steps*num_envs/batch_size)):
-                    # Sample a batch
-                    if len(replay_buffer) < batch_size:
-                        continue # Don't train if buffer isn't full enough
+                # --- Update Networks ---
+                if total_frames >= initial_collect_frames and train:
+                    for j in range(int(1.5*collect_steps*num_envs/batch_size)):
+                        # Sample a batch
+                        if len(replay_buffer) < batch_size:
+                            continue # Don't train if buffer isn't full enough
 
-                    batch = replay_buffer.sample(batch_size=batch_size).to(device) # Move batch to training device
+                        batch = replay_buffer.sample(batch_size=batch_size).to(device) # Move batch to training device
 
-                    # Prepare data from batch
-                    pixels = batch["pixels"]
-                    vel = batch["vel"]
-                    angle = batch["angle"]
-                    action = batch["action"] # Use one-hot action
-                    next_pixels = batch["next"]["pixels"]
-                    next_vel = batch["next"]["vel"]
-                    next_angle = batch["next"]["angle"]
-                    reward = batch["next"]["reward"]
-                    done = batch["next"]["done"]
-                    # Ensure reward and done have correct shape [batch_size, 1]
-                    reward = reward.view(-1, 1)
-                    done = done.view(-1, 1).float() # Ensure float for calculations
+                        # Prepare data from batch
+                        pixels = batch["pixels"]
+                        vel = batch["vel"]
+                        angle = batch["angle"]
+                        action = batch["action"] # Use one-hot action
+                        next_pixels = batch["next"]["pixels"]
+                        next_vel = batch["next"]["vel"]
+                        next_angle = batch["next"]["angle"]
+                        reward = batch["next"]["reward"]
+                        done = batch["next"]["done"]
+                        # Ensure reward and done have correct shape [batch_size, 1]
+                        reward = reward.view(-1, 1)
+                        done = done.view(-1, 1).float() # Ensure float for calculations
 
-                    alpha = log_alpha.exp() # Current temperature value
+                        alpha = log_alpha.exp() # Current temperature value
 
-                    # --- Critic Loss (Q-Loss) ---
-                    with torch.no_grad(): # Target calculations don't need gradients
-                        # Get next action distribution from policy
-                        next_logits = policy.forward(next_pixels, next_vel, next_angle) # Get next logits
-                        next_probs = F.softmax(next_logits, dim=-1)
-                        next_log_probs = F.log_softmax(next_logits, dim=-1)
+                        # --- Critic Loss (Q-Loss) ---
+                        with torch.no_grad(): # Target calculations don't need gradients
+                            # Get next action distribution from policy
+                            next_logits = policy.forward(next_pixels, next_vel, next_angle) # Get next logits
+                            next_probs = F.softmax(next_logits, dim=-1)
+                            next_log_probs = F.log_softmax(next_logits, dim=-1)
 
-                        next_td = TensorDict({"pixels": next_pixels, "vel": next_vel, "angle": next_angle}, batch_size=batch.batch_size)
-                        target_q1_all_actions = target_q_net1(next_td)["state_action_value1"]
-                        target_q2_all_actions = target_q_net2(next_td)["state_action_value2"]
+                            next_td = TensorDict({"pixels": next_pixels, "vel": next_vel, "angle": next_angle}, batch_size=batch.batch_size)
+                            target_q1_all_actions = target_q_net1(next_td)["state_action_value1"]
+                            target_q2_all_actions = target_q_net2(next_td)["state_action_value2"]
 
-                        # Take the minimum of the two target Q networks
-                        min_target_q_all_actions = torch.min(target_q1_all_actions, target_q2_all_actions)
+                            # Take the minimum of the two target Q networks
+                            min_target_q_all_actions = torch.min(target_q1_all_actions, target_q2_all_actions)
 
-                        # Calculate expected target value V(s') = sum_a'[pi(a'|s') * (Q_target_min(s', a') - alpha * log pi(a'|s'))]
-                        next_state_value = torch.sum(next_probs * (min_target_q_all_actions - alpha.detach() * next_log_probs), dim=-1, keepdim=True)
+                            # Calculate expected target value V(s') = sum_a'[pi(a'|s') * (Q_target_min(s', a') - alpha * log pi(a'|s'))]
+                            next_state_value = torch.sum(next_probs * (min_target_q_all_actions - alpha.detach() * next_log_probs), dim=-1, keepdim=True)
 
-                        # Calculate Bellman target y = r + gamma * (1 - d) * V(s')
-                        target_q_value = reward + gamma * (1.0 - done) * next_state_value
+                            # Calculate Bellman target y = r + gamma * (1 - d) * V(s')
+                            target_q_value = reward + gamma * (1.0 - done) * next_state_value
 
-                    # Calculate current Q values from main networks for the actions taken
-                    current_td = TensorDict({"pixels": pixels, "vel": vel, "angle": angle}, batch_size=batch.batch_size)
-                    current_q1 = q_net1(current_td)["state_action_value1"].gather(1, action.unsqueeze(1)).squeeze(1)
-                    current_q2 = q_net2(current_td)["state_action_value2"].gather(1, action.unsqueeze(1)).squeeze(1)
+                        # Calculate current Q values from main networks for the actions taken
+                        current_td = TensorDict({"pixels": pixels, "vel": vel, "angle": angle}, batch_size=batch.batch_size)
+                        current_q1 = q_net1(current_td)["state_action_value1"].gather(1, action.unsqueeze(1)).squeeze(1)
+                        current_q2 = q_net2(current_td)["state_action_value2"].gather(1, action.unsqueeze(1)).squeeze(1)
+                        
+                        # Calculate Critic loss (MSE)
+                        loss_q1 = F.mse_loss(current_q1, target_q_value.detach().squeeze())
+                        loss_q2 = F.mse_loss(current_q2, target_q_value.detach().squeeze())
+                        loss_q = loss_q1 + loss_q2
+
+                        # Optimize Critics
+                        critic1_optim.zero_grad()
+                        loss_q1.backward()
+                        critic1_optim.step()
+
+                        critic2_optim.zero_grad()
+                        loss_q2.backward()
+                        critic2_optim.step()
+
+                        # Get current action distribution from policy for the batch states
+                        current_logits = policy.forward(pixels, vel, angle) # Get current logits
+                        current_probs = F.softmax(current_logits, dim=-1)
+                        current_log_probs = F.log_softmax(current_logits, dim=-1)
+
+                        # Calculate Q values for all actions using the *current* policy and *main* Q networks
+                        # Reuse expanded/flattened tensors from critic loss if possible, but recompute Q-values
+
+                        q1_all_actions = target_q_net1(current_td)["state_action_value1"]
+                        q2_all_actions = target_q_net2(current_td)["state_action_value2"]
+                        min_q_all_actions = torch.min(q1_all_actions, q2_all_actions)
+
+                        # Calculate Actor loss: J_pi = E_{s~D} [ sum_a [ pi(a|s) * (alpha * log pi(a|s) - Q_min(s,a)) ] ]
+                        # We want to maximize this, so minimize its negative.
+                        actor_loss_term = current_probs * (alpha.detach() * current_log_probs - min_q_all_actions.detach())
+                        if lmbda != -1:
+                            loss_actor = (torch.sum(actor_loss_term, dim=-1)).mean() + policy.regularization()
+                        else:
+                            loss_actor = (torch.sum(actor_loss_term, dim=-1)).mean()
+
+                        # Optimize Actor
+                        actor_optim.zero_grad()
+                        loss_actor.backward()
+                        actor_optim.step()
+
+                        # Loss: E[log_alpha * (entropy - target_entropy)]
+                        # We detach the entropy difference because we only optimize log_alpha here.
+                        #    log_pi = torch.log(torch.tensor(self.pi[0:self.index], requires_grad=False))
+                        #loss = torch.sum(torch.tensor(self.pi[0:self.index], requires_grad=False) * (-self.log_alpha * (log_pi + self.H)))
                     
-                    # Calculate Critic loss (MSE)
-                    loss_q1 = F.mse_loss(current_q1, target_q_value.detach().squeeze())
-                    loss_q2 = F.mse_loss(current_q2, target_q_value.detach().squeeze())
-                    loss_q = loss_q1 + loss_q2
+                        loss_alpha = ((current_probs.detach() * (-log_alpha) * (current_log_probs + target_entropy).detach()).sum(axis=1)).mean()
 
-                    # Optimize Critics
-                    critic1_optim.zero_grad()
-                    loss_q1.backward()
-                    critic1_optim.step()
+                        # Optimize Alpha
+                        alpha_optim.zero_grad()
+                        loss_alpha.backward()
+                        alpha_optim.step()
+                        #with torch.no_grad():
+                        #    log_alpha.clamp_(min=-11.4)
 
-                    critic2_optim.zero_grad()
-                    loss_q2.backward()
-                    critic2_optim.step()
+                        # Get current alpha for logging AFTER optimizer step potentially changed log_alpha
+                        alpha = log_alpha.exp().item()
 
-                    # Get current action distribution from policy for the batch states
-                    current_logits = policy.forward(pixels, vel, angle) # Get current logits
-                    current_probs = F.softmax(current_logits, dim=-1)
-                    current_log_probs = F.log_softmax(current_logits, dim=-1)
+                        # --- Update Target Networks ---
+                        soft_update(target_q_net1, q_net1, tau)
+                        soft_update(target_q_net2, q_net2, tau)
 
-                    # Calculate Q values for all actions using the *current* policy and *main* Q networks
-                    # Reuse expanded/flattened tensors from critic loss if possible, but recompute Q-values
+                    #print(step)
 
-                    q1_all_actions = target_q_net1(current_td)["state_action_value1"]
-                    q2_all_actions = target_q_net2(current_td)["state_action_value2"]
-                    min_q_all_actions = torch.min(q1_all_actions, q2_all_actions)
+                        # --- Logging (use manually calculated losses) ---
+                    if step % 200 == 0: # Log roughly every 1000 frames
+                        if lmbda != -1:
+                            save_path = f"Sparsity_Checkpoints_duplicate/chkpt_{lmbda}_{num_maps}_{step}_{iteration}.pth"
+                        else:
+                            save_path = f"Sparsity_Checkpoints_duplicate/chkpt_SAC_{num_maps}_{step}_{iteration}.pth"
 
-                    # Calculate Actor loss: J_pi = E_{s~D} [ sum_a [ pi(a|s) * (alpha * log pi(a|s) - Q_min(s,a)) ] ]
-                    # We want to maximize this, so minimize its negative.
-                    actor_loss_term = current_probs * (alpha.detach() * current_log_probs - min_q_all_actions.detach())
-                    if lmbda != -1:
-                        loss_actor = (torch.sum(actor_loss_term, dim=-1)).mean() + policy.regularization()
-                    else:
-                        loss_actor = (torch.sum(actor_loss_term, dim=-1)).mean()
+                        # Ensure log_alpha value is current before saving optimizer state
+                        # (though it should be if optimizer step happened)
+                        current_log_alpha = log_alpha.detach().clone()
 
-                    # Optimize Actor
-                    actor_optim.zero_grad()
-                    loss_actor.backward()
-                    actor_optim.step()
+                        torch.save({
+                            'actor_state_dict': policy.state_dict(),
+                            'critic1_state_dict': q_net1.state_dict(),
+                            'critic2_state_dict': q_net2.state_dict(),
+                            'target1_state_dict': target_q_net1.state_dict(),
+                            'target2_state_dict': target_q_net2.state_dict(),
+                            'actor_optim_state_dict': actor_optim.state_dict(),
+                            'critic1_optim_state_dict': critic1_optim.state_dict(),
+                            'critic2_optim_state_dict': critic2_optim.state_dict(),
+                            'alpha_optim_state_dict': alpha_optim.state_dict(),
+                            # Explicitly save log_alpha value as well for robustness
+                            'log_alpha': current_log_alpha
+                        }, save_path)
 
-                    # Loss: E[log_alpha * (entropy - target_entropy)]
-                    # We detach the entropy difference because we only optimize log_alpha here.
-                    #    log_pi = torch.log(torch.tensor(self.pi[0:self.index], requires_grad=False))
-                    #loss = torch.sum(torch.tensor(self.pi[0:self.index], requires_grad=False) * (-self.log_alpha * (log_pi + self.H)))
-                
-                    loss_alpha = ((current_probs.detach() * (-log_alpha) * (current_log_probs + target_entropy).detach()).sum(axis=1)).mean()
+                        print(f"Step={step:07d}  Actor Loss={loss_actor.item():.3f}"
+                            f"  Q Loss={loss_q.item():.3f} ({loss_q1.item():.3f}, {loss_q2.item():.3f})"
+                            f"  Alpha Loss={loss_alpha}  Alpha={alpha}"
+                            f"  Buffer Size={len(replay_buffer)}")
 
-                    # Optimize Alpha
-                    alpha_optim.zero_grad()
-                    loss_alpha.backward()
-                    alpha_optim.step()
-                    #with torch.no_grad():
-                    #    log_alpha.clamp_(min=-11.4)
-
-                    # Get current alpha for logging AFTER optimizer step potentially changed log_alpha
-                    alpha = log_alpha.exp().item()
-
-                    # --- Update Target Networks ---
-                    soft_update(target_q_net1, q_net1, tau)
-                    soft_update(target_q_net2, q_net2, tau)
-
-                #print(step)
-
-                    # --- Logging (use manually calculated losses) ---
-                if step % 100 == 0: # Log roughly every 1000 frames
-                    if lmbda != -1:
-                        save_path = f"Sparsity_Checkpoints_maps\\chkpt_50_{num_maps}_{step}.pth"
-                    else:
-                        save_path = f"Sparsity_Checkpoints_maps\\chkpt_SAC_{num_maps}_{step}.pth"
-
-                    # Ensure log_alpha value is current before saving optimizer state
-                    # (though it should be if optimizer step happened)
-                    current_log_alpha = log_alpha.detach().clone()
-
-                    torch.save({
-                        'actor_state_dict': policy.state_dict(),
-                        'critic1_state_dict': q_net1.state_dict(),
-                        'critic2_state_dict': q_net2.state_dict(),
-                        'target1_state_dict': target_q_net1.state_dict(),
-                        'target2_state_dict': target_q_net2.state_dict(),
-                        'actor_optim_state_dict': actor_optim.state_dict(),
-                        'critic1_optim_state_dict': critic1_optim.state_dict(),
-                        'critic2_optim_state_dict': critic2_optim.state_dict(),
-                        'alpha_optim_state_dict': alpha_optim.state_dict(),
-                        # Explicitly save log_alpha value as well for robustness
-                        'log_alpha': current_log_alpha
-                    }, save_path)
-
-                    print(f"Step={step:07d}  Actor Loss={loss_actor.item():.3f}"
-                        f"  Q Loss={loss_q.item():.3f} ({loss_q1.item():.3f}, {loss_q2.item():.3f})"
-                        f"  Alpha Loss={loss_alpha}  Alpha={alpha}"
-                        f"  Buffer Size={len(replay_buffer)}")
-
-        print("Training finished.")
+            print("Training finished.")
 
 
 if __name__ == "__main__":
